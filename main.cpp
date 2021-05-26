@@ -208,6 +208,8 @@ void GazeTracking::update()
 			} else {
 				gazePoint_ = {0.0f, 0.0f, -1.0f};
 			}
+
+			std::cout << x << std::endl;
 		}
 	}
 
@@ -240,6 +242,7 @@ void GazeTracking::draw()
 		vec3 gazePoint = {gazePoint_.x, gazePoint_.y, gazePoint_.z};
 		vec3 gazeVec = normalize(gazePoint);
 		vec3 rotatedGazeVec = rot_*gazeVec;
+		// vec3 rotatedGazeVec = gazeVec;
 
 		quat eyeQuat = rotation({0.0f, 0.0f, -1.0f}, gazeVec);
 
@@ -306,6 +309,7 @@ void GazeTracking::draw()
 			gl::ScopedMatrices scope;
 			gl::translate(pos_.x, pos_.y, pos_.z);
 			gl::rotate(rot_ * eyeQuat);
+			// gl::rotate(eyeQuat);
 			arrow_->draw();
 		}
 	}
