@@ -1,3 +1,5 @@
+#include <msgpack.hpp>
+
 #include "cinder/app/App.h"
 #include "cinder/app/RendererGl.h"
 #include "cinder/gl/gl.h"
@@ -10,12 +12,12 @@
 
 #include <chrono>
 #include <sstream>
+#include <thread>
+#include <atomic>
 
-#include <librealsense2/rs.hpp>
 #include <zmq.hpp>
 #include <zmq_addon.hpp>
 
-#include <msgpack.hpp>
 #include <json.hpp>
 
 using namespace ci;
@@ -27,6 +29,7 @@ using namespace std::chrono_literals;
 class GazeTracking : public App
 {
 public:
+    ~GazeTracking();
 	void setup();
 	void keyDown(KeyEvent event) override;
 	void mouseDown(MouseEvent event) override;
@@ -37,6 +40,12 @@ public:
 	void update() override;
 	void draw() override;
 private:
+
+    void readZMQData();
+    std::atomic<bool> runReader_{true};
+    std::mutex mtx_;
+    std::thread zmqReader_;
+
 	CameraPersp cam_;
 	CameraUi cameraUi_{&cam_};
 	TriMeshRef arrowMesh_;
@@ -49,8 +58,7 @@ private:
 	Font font_{"Arial", 24};
 	vec3 pos_;
 	quat rot_;
-	vec3 gazePoint_{0.0f, 0.0f, 1.0f};
-	rs2::pipeline pipeline_;
+	vec3 gazePoint_{0.0f, 0.0f, -1.0f};
 	zmq::context_t context_;
 	zmq::socket_t sub_socket_;
 	bool mouseDown_{false};
@@ -85,11 +93,6 @@ void GazeTracking::setup()
 	mesh = TriMesh::create( loader );
 	meshes_.push_back(mesh);
 	batches_.push_back(gl::Batch::create(*mesh, shader));
-	
-
-	rs2::config cfg;
-	cfg.enable_stream(RS2_STREAM_POSE, RS2_FORMAT_6DOF);
-	pipeline_.start(cfg);
 
 	// construct a REQ (request) socket and connect to interface
 	zmq::socket_t socket{context_, zmq::socket_type::req};
@@ -104,6 +107,7 @@ void GazeTracking::setup()
 	bool pupil_detected = true;
 	zmq::message_t reply{};
 	auto res = socket.recv(reply, zmq::recv_flags::dontwait);
+
 	if (!res)
 	{
 		pupil_detected = false;
@@ -111,6 +115,7 @@ void GazeTracking::setup()
 
 	if (pupil_detected)
 	{
+        std::cout << "Pupil detected" << std::endl;
 		std::string sub_port = reply.to_string();
 
 		const std::string pub_request{"PUB_PORT"};
@@ -121,11 +126,21 @@ void GazeTracking::setup()
 
 		sub_socket_ = zmq::socket_t{context_, zmq::socket_type::sub};
 		sub_socket_.connect(std::string("tcp://localhost:") + sub_port);
-		sub_socket_.set(zmq::sockopt::subscribe, "gaze.");
-	}
-
-	
+		
+        sub_socket_.set(zmq::sockopt::subscribe, "gaze.");
+        sub_socket_.set(zmq::sockopt::subscribe, "tracking");
+    }
+    
+    socket.close();
+    
+    zmqReader_ = std::thread(&GazeTracking::readZMQData, this);
 }
+
+GazeTracking::~GazeTracking() {
+    runReader_ = false;
+    zmqReader_.join();
+}
+
 
 void GazeTracking::resize()
 {
@@ -181,50 +196,71 @@ void GazeTracking::keyDown(KeyEvent event)
 
 void GazeTracking::update()
 {
-	if (sub_socket_)
-	{
-		std::vector<zmq::message_t> recv_msgs;
-		zmq::recv_result_t result = zmq::recv_multipart(sub_socket_, std::back_inserter(recv_msgs));
-		msgpack::object_handle oh = msgpack::unpack((const char *)recv_msgs[1].data(), recv_msgs[1].size());
-		msgpack::object obj = oh.get();
-		std::ostringstream oss;
-		oss << obj;
-		auto j = json::parse(oss.str());
+}
 
-		auto confidence = j["confidence"];
-		auto gaze_point_3d = j["gaze_point_3d"];
+void GazeTracking::readZMQData() {
+    while (runReader_) {
+        if (sub_socket_)
+        {
+            std::vector<zmq::message_t> recv_msgs;
+            zmq::recv_result_t result = zmq::recv_multipart(sub_socket_, std::back_inserter(recv_msgs));
 
-		float c = static_cast<float>(confidence);
+            std::string topic((const char *)recv_msgs[0].data(), recv_msgs[0].size());
 
-		if (c > 0.9f) {
-			float x = static_cast<float>(gaze_point_3d[0]);
-			float y = static_cast<float>(gaze_point_3d[1]);
-			float z = static_cast<float>(gaze_point_3d[2]);
+            if (topic == "gaze.3d.0.") {
 
-			// mm -> m
-			// change coordinate system
-			if (useGaze_) {
-				gazePoint_ = {x/100.0f, -y/100.0f, -z/100.0f};
-			} else {
-				gazePoint_ = {0.0f, 0.0f, -1.0f};
-			}
+                msgpack::object_handle oh = msgpack::unpack((const char *)recv_msgs[1].data(), recv_msgs[1].size());
+                msgpack::object obj = oh.get();
 
-			std::cout << x << std::endl;
-		}
-	}
+                std::ostringstream oss;
+                oss << obj;
+                auto j = json::parse(oss.str());
 
-	rs2::frameset frameset;
 
-	if (pipeline_.poll_for_frames(&frameset))
-	{
-		if (rs2::pose_frame pose_frame = frameset.first_or_default(RS2_STREAM_POSE))
-		{
-			rs2_pose pose_sample = pose_frame.get_pose_data();
-			pos_ = vec3{pose_sample.translation.x, pose_sample.translation.y, pose_sample.translation.z};
-			rot_ = {pose_sample.rotation.w, pose_sample.rotation.x, pose_sample.rotation.y, pose_sample.rotation.z};
-		}
-	}
+                // std::cout << j << std::endl;
+                auto confidence = j["confidence"];
+                auto gaze_point_3d = j["gaze_normal_3d"];
 
+                float c = static_cast<float>(confidence);
+
+                if (c > 0.9f) {
+                    float x = static_cast<float>(gaze_point_3d[0]);
+                    float y = static_cast<float>(gaze_point_3d[1]);
+                    float z = static_cast<float>(gaze_point_3d[2]);
+
+                    // mm -> m
+                    // change coordinate system
+                    if (useGaze_) {
+                        std::lock_guard lock(mtx_);
+                        gazePoint_ = {x/100.0f, -y/100.0f, -z/100.0f};
+                    } else {
+                        std::lock_guard lock(mtx_);
+                        gazePoint_ = {0.0f, 0.0f, -1.0f};
+                    }
+                }
+            }
+            else if (topic == "tracking") {
+                msgpack::object_handle oh = msgpack::unpack((const char *)recv_msgs[1].data(), recv_msgs[1].size());
+                msgpack::object obj = oh.get();
+
+                std::ostringstream oss;
+                oss << obj;
+                try {
+                    auto j = json::parse(oss.str());
+
+                    auto motion = j["motion"];
+                    std::lock_guard lock(mtx_);
+                    pos_ = vec3{motion[0], motion[1], motion[2]};
+                    rot_ = {motion[6], motion[3], motion[4], motion[5]};
+                }
+                catch (...) {
+                    std::cout << "error during json parsing" << std::endl;
+                }
+            }
+        }
+
+        std::this_thread::yield();
+    }
 }
 
 void GazeTracking::draw()
@@ -239,9 +275,19 @@ void GazeTracking::draw()
 		gl::setMatrices(cam_);
 
 		// vec3 gazePoint = {gazePoint_.x, -gazePoint_.y, -gazePoint_.z};
-		vec3 gazePoint = {gazePoint_.x, gazePoint_.y, gazePoint_.z};
+		vec3 gazePoint;
+        vec3 pos;
+        quat rot;
+
+        {
+            std::lock_guard lock(mtx_);
+            gazePoint = {gazePoint_.x, gazePoint_.y, gazePoint_.z};
+            pos = 10.0f*pos_;
+            rot = rot_;
+        }
+
 		vec3 gazeVec = normalize(gazePoint);
-		vec3 rotatedGazeVec = rot_*gazeVec;
+		vec3 rotatedGazeVec = rot*gazeVec;
 		// vec3 rotatedGazeVec = gazeVec;
 
 		quat eyeQuat = rotation({0.0f, 0.0f, -1.0f}, gazeVec);
@@ -252,13 +298,12 @@ void GazeTracking::draw()
 			batch->draw();
 		}
 
-		Ray ray{pos_, rotatedGazeVec};
+		Ray ray{pos, rotatedGazeVec};
 
 		TextBox tbox = TextBox().alignment(TextBox::LEFT).font(font_).size(ivec2(600, TextBox::GROW)).text("");
 		tbox.setColor(Color(1.0f, 0.65f, 0.35f));
 		tbox.setBackgroundColor(ColorA(0.5, 0, 0, 1));
 		textTexture_ = gl::Texture2d::create(tbox.render());
-
 
 		int id = 0;
 
@@ -303,12 +348,13 @@ void GazeTracking::draw()
 
 		}
 
-		gl::drawLine(pos_, pos_ + 100.0f*rotatedGazeVec);
+		gl::drawLine(pos, pos + 100.0f*rotatedGazeVec);
 
 		{
+            //std::cout << pos << std::endl;
 			gl::ScopedMatrices scope;
-			gl::translate(pos_.x, pos_.y, pos_.z);
-			gl::rotate(rot_ * eyeQuat);
+			gl::translate(pos.x, pos.y, pos.z);
+			gl::rotate(-rot * eyeQuat);
 			// gl::rotate(eyeQuat);
 			arrow_->draw();
 		}
