@@ -3,7 +3,7 @@ set( CMAKE_VERBOSE_MAKEFILE ON )
 
 project( GazeTracking )
 
-set(CINDER_PATH "/Users/martin/devel/Cinder")
+#set(CINDER_PATH "/Users/martin/devel/Cinder")
 get_filename_component( APP_PATH "${CMAKE_CURRENT_SOURCE_DIR}" ABSOLUTE )
 
 include( "${CINDER_PATH}/proj/cmake/modules/cinderMakeApp.cmake" )

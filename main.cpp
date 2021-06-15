@@ -216,8 +216,6 @@ void GazeTracking::readZMQData() {
                 oss << obj;
                 auto j = json::parse(oss.str());
 
-
-                // std::cout << j << std::endl;
                 auto confidence = j["confidence"];
                 auto gaze_point_3d = j["gaze_normal_3d"];
 
