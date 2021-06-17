@@ -89,6 +89,12 @@ void GazeTracking::setup()
 	meshes_.push_back(mesh);
 	batches_.push_back(gl::Batch::create(*mesh, shader));
 
+	mesh = TriMesh::create(
+		geom::Teapot() >> geom::Translate(-1.0f, 0.5f, 1.0f)
+	);
+	meshes_.push_back(mesh);
+	batches_.push_back(gl::Batch::create(*mesh, shader));
+
 	// loader = loadAsset("monkey.obj");
 	// mesh = TriMesh::create( loader );
 	// meshes_.push_back(mesh);
@@ -235,7 +241,7 @@ void GazeTracking::readZMQData() {
                         std::lock_guard lock(mtx_);
 						// convert mm -> m
 						// change coordinate system
-                        gazeNormalized_ = {x/100.0f, -y/100.0f, -z/100.0f};
+						gazeNormalized_ = {x, -y, -z};
                     } else {
                         std::lock_guard lock(mtx_);
                         gazeNormalized_ = {0.0f, 0.0f, -1.0f};
@@ -285,21 +291,16 @@ void GazeTracking::draw()
 
         {
             std::lock_guard lock(mtx_);
-            gazeVec = {gazeNormalized_.x, gazeNormalized_.y, gazeNormalized_.z};
+			gazeVec = gazeNormalized_;
             pos = pos_;
             rot = rot_;
         }
 
-		// vec3 gazeVec = normalize(gazeNormalized);
 		vec3 rotatedGazeVec = rot*gazeVec;
 
 		quat eyeQuat = rotation({0.0f, 0.0f, -1.0f}, gazeVec);
 
 		gl::drawCoordinateFrame(5.0f);
-
-		for (auto& batch : batches_) {
-			batch->draw();
-		}
 
 		Ray ray{pos, rotatedGazeVec};
 
@@ -310,7 +311,10 @@ void GazeTracking::draw()
 
 		int id = 0;
 
-		for (auto& mesh : meshes_) {
+		// for (auto& mesh : meshes_) {
+		for (int i = 0; i < meshes_.size(); ++i) {
+			
+			auto& mesh = meshes_[i];
 			const size_t trianglecount = mesh->getNumTriangles();
 
 			float result = FLT_MAX;
@@ -333,7 +337,11 @@ void GazeTracking::draw()
 			}
 
 			// Did we have a hit?
-			if( distance > 0.0f ) {
+			if( distance > 0.0f && i > 0) {
+				gl::disableWireframe();
+				batches_[i]->draw();
+				gl::enableWireframe();
+
 				// Calculate the exact position of the hit.
 				auto pickedPoint = ray.calcPosition( result );
 				gl::ScopedColor color(0.0f, 0.0f, 1.0f, 0.5f);
@@ -345,6 +353,9 @@ void GazeTracking::draw()
 				tbox.setColor(Color(1.0f, 0.65f, 0.35f));
 				tbox.setBackgroundColor(ColorA(0.5, 0, 0, 1));
 				textTexture_ = gl::Texture2d::create(tbox.render());
+
+			} else {
+				batches_[i]->draw();
 			}
 
 			id++;
