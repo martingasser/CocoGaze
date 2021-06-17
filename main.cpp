@@ -56,9 +56,9 @@ private:
 
 	gl::TextureRef textTexture_;
 	Font font_{"Arial", 24};
-	vec3 pos_;
+	vec3 pos_{0.0, 1.0f, 0.0f};
 	quat rot_;
-	vec3 gazePoint_{0.0f, 0.0f, -1.0f};
+	vec3 gazeNormalized_{0.0f, 0.0f, -1.0f};
 	zmq::context_t context_;
 	zmq::socket_t sub_socket_;
 	bool mouseDown_{false};
@@ -80,19 +80,24 @@ void GazeTracking::setup()
 	auto shader = gl::getStockShader(lambert);
 
 	arrowMesh_ = TriMesh::create(
-		(geom::Cone() & (geom::Cylinder().radius(0.2f) >> geom::Translate(0.0f, -2.0f, 0.0f))) >> geom::Rotate(-M_PI / 2.0f, {1.0f, 0.0f, 0.0f}));
+		(geom::Cone().base(0.08f).apex(0.0f).height(0.1f) & (geom::Cylinder().radius(0.02f).height(0.2f) >> geom::Translate(0.0f, -0.2f, 0.0f))) >> geom::Rotate(-M_PI / 2.0f, {1.0f, 0.0f, 0.0f}));
 
 	arrow_ = gl::Batch::create(*arrowMesh_, shader);
 
-	ObjLoader loader( loadAsset("cone.obj") );
+	ObjLoader loader( loadAsset("room.obj") );
 	auto mesh = TriMesh::create( loader );
 	meshes_.push_back(mesh);
 	batches_.push_back(gl::Batch::create(*mesh, shader));
 
-	loader = loadAsset("monkey.obj");
-	mesh = TriMesh::create( loader );
-	meshes_.push_back(mesh);
-	batches_.push_back(gl::Batch::create(*mesh, shader));
+	// loader = loadAsset("monkey.obj");
+	// mesh = TriMesh::create( loader );
+	// meshes_.push_back(mesh);
+	// batches_.push_back(gl::Batch::create(*mesh, shader));
+
+	// loader = loadAsset("cone.obj");
+	// mesh = TriMesh::create( loader );
+	// meshes_.push_back(mesh);
+	// batches_.push_back(gl::Batch::create(*mesh, shader));
 
 	// construct a REQ (request) socket and connect to interface
 	zmq::socket_t socket{context_, zmq::socket_type::req};
@@ -226,14 +231,14 @@ void GazeTracking::readZMQData() {
                     float y = static_cast<float>(gaze_point_3d[1]);
                     float z = static_cast<float>(gaze_point_3d[2]);
 
-                    // mm -> m
-                    // change coordinate system
                     if (useGaze_) {
                         std::lock_guard lock(mtx_);
-                        gazePoint_ = {x/100.0f, -y/100.0f, -z/100.0f};
+						// convert mm -> m
+						// change coordinate system
+                        gazeNormalized_ = {x/100.0f, -y/100.0f, -z/100.0f};
                     } else {
                         std::lock_guard lock(mtx_);
-                        gazePoint_ = {0.0f, 0.0f, -1.0f};
+                        gazeNormalized_ = {0.0f, 0.0f, -1.0f};
                     }
                 }
             }
@@ -272,26 +277,26 @@ void GazeTracking::draw()
 		gl::enableDepthWrite();
 		gl::setMatrices(cam_);
 
-		// vec3 gazePoint = {gazePoint_.x, -gazePoint_.y, -gazePoint_.z};
-		vec3 gazePoint;
+		gl::enableWireframe();
+
+		vec3 gazeVec;
         vec3 pos;
         quat rot;
 
         {
             std::lock_guard lock(mtx_);
-            gazePoint = {gazePoint_.x, gazePoint_.y, gazePoint_.z};
-            pos = 10.0f*pos_;
+            gazeVec = {gazeNormalized_.x, gazeNormalized_.y, gazeNormalized_.z};
+            pos = pos_;
             rot = rot_;
         }
 
-		vec3 gazeVec = normalize(gazePoint);
+		// vec3 gazeVec = normalize(gazeNormalized);
 		vec3 rotatedGazeVec = rot*gazeVec;
-		// vec3 rotatedGazeVec = gazeVec;
 
 		quat eyeQuat = rotation({0.0f, 0.0f, -1.0f}, gazeVec);
 
 		gl::drawCoordinateFrame(5.0f);
-		// room_->draw();
+
 		for (auto& batch : batches_) {
 			batch->draw();
 		}
@@ -346,14 +351,14 @@ void GazeTracking::draw()
 
 		}
 
-		gl::drawLine(pos, pos + 100.0f*rotatedGazeVec);
+		gl::disableWireframe();
+
+		// gl::drawLine(pos, pos + 100.0f*rotatedGazeVec);
 
 		{
-            //std::cout << pos << std::endl;
 			gl::ScopedMatrices scope;
 			gl::translate(pos.x, pos.y, pos.z);
 			gl::rotate(-rot * eyeQuat);
-			// gl::rotate(eyeQuat);
 			arrow_->draw();
 		}
 	}
