@@ -84,19 +84,30 @@ void GazeTracking::setup()
 
 	arrow_ = gl::Batch::create(*arrowMesh_, shader);
 
-	ObjLoader loader( loadAsset("room.obj") );
+	ObjLoader loader( loadAsset("PEEK_3dmodel.obj") );
 	auto mesh = TriMesh::create( loader );
+	
 	meshes_.push_back(mesh);
 	batches_.push_back(gl::Batch::create(*mesh, shader));
 
-	mesh = TriMesh::create(
-		geom::Teapot() >> geom::Translate(-1.0f, 0.5f, 1.0f)
-	);
+	loader = loadAsset("obj1.obj");
+	
+	AxisAlignedBox bbox;
+	auto source = TriMesh( loader ); // >> geom::Bounds(&bbox) >> geom::Translate(1.0f, 0.0f, 0.0f);
+	//std::cout << bbox.getCenter() << bbox.getExtents() << std::endl;
+	source = source >> geom::Rotate(1.5f*M_PI, vec3(1.0f, 0.0f, 0.0f)) >> geom::Translate(0.5f, 1.0f, -0.5f);
+	mesh = TriMesh::create(source);
+	
 	meshes_.push_back(mesh);
 	batches_.push_back(gl::Batch::create(*mesh, shader));
 
-	// loader = loadAsset("monkey.obj");
-	// mesh = TriMesh::create( loader );
+	// loader = loadAsset("obj2.obj");
+	// mesh = TriMesh::create(TriMesh( loader ) >> geom::Translate(0.0f, 0.0f, 0.0f));
+	// meshes_.push_back(mesh);
+	// batches_.push_back(gl::Batch::create(*mesh, shader));
+
+	// loader = loadAsset("obj3.obj");
+	// mesh = TriMesh::create( TriMesh(loader) >> geom::Translate(0.0f, 0.0f, 0.0f) );
 	// meshes_.push_back(mesh);
 	// batches_.push_back(gl::Batch::create(*mesh, shader));
 
@@ -259,7 +270,7 @@ void GazeTracking::readZMQData() {
 
                     auto motion = j["motion"];
                     std::lock_guard lock(mtx_);
-                    pos_ = vec3{motion[0], motion[1], motion[2]};
+                    pos_ = vec3{motion[0], motion[1], motion[2]} + vec3{1.4f, 1.75f, 0.0f};
                     rot_ = {motion[6], motion[3], motion[4], motion[5]};
                 }
                 catch (...) {
@@ -311,10 +322,11 @@ void GazeTracking::draw()
 
 		int id = 0;
 
-		// for (auto& mesh : meshes_) {
 		for (int i = 0; i < meshes_.size(); ++i) {
 			
 			auto& mesh = meshes_[i];
+
+			/*
 			const size_t trianglecount = mesh->getNumTriangles();
 
 			float result = FLT_MAX;
@@ -335,17 +347,27 @@ void GazeTracking::draw()
 					}
 				}
 			}
+			*/
 
+			auto bbox = mesh->calcBoundingBox();
+			bbox = AxisAlignedBox(bbox.getCenter()-3.0f*bbox.getExtents(), bbox.getCenter()+3.0f*bbox.getExtents());
+
+			if (i == 0) {
+				gl::disableWireframe();
+				batches_[i]->draw();
+				gl::enableWireframe();
+			}
 			// Did we have a hit?
-			if( distance > 0.0f && i > 0) {
+			//else if( distance > 0.0f) {
+			else if (bbox.intersects(ray)) {
 				gl::disableWireframe();
 				batches_[i]->draw();
 				gl::enableWireframe();
 
 				// Calculate the exact position of the hit.
-				auto pickedPoint = ray.calcPosition( result );
-				gl::ScopedColor color(0.0f, 0.0f, 1.0f, 0.5f);
-				gl::drawCube(pickedPoint, {2.0f, 2.0f, 2.0f});
+				// auto pickedPoint = ray.calcPosition( result );
+				// gl::ScopedColor color(0.0f, 0.0f, 1.0f, 0.5f);
+				// gl::drawCube(pickedPoint, {2.0f, 2.0f, 2.0f});
 
 				std::ostringstream oss_gp;
 				oss_gp << "Object " << id << std::endl;
