@@ -7,6 +7,8 @@
 #include "cinder/Rand.h"
 #include "cinder/ObjLoader.h"
 #include "cinder/CameraUi.h"
+#include "cinder/CinderImGui.h"
+#include "cinder/Json.h"
 
 #include "include/Resources.h"
 
@@ -14,10 +16,11 @@
 #include <sstream>
 #include <thread>
 #include <atomic>
+#include <fstream>
+#include <streambuf>
 
 #include <zmq.hpp>
 #include <zmq_addon.hpp>
-
 #include <json.hpp>
 
 using namespace ci;
@@ -30,7 +33,7 @@ class GazeTracking : public App
 {
 public:
     ~GazeTracking();
-	void setup();
+	void setup() override;
 	void keyDown(KeyEvent event) override;
 	void mouseDown(MouseEvent event) override;
 	void mouseDrag(MouseEvent event) override;
@@ -49,6 +52,7 @@ private:
 	CameraPersp cam_;
 	CameraUi cameraUi_{&cam_};
 	TriMeshRef arrowMesh_;
+	gl::GlslProgRef shader_;
 	gl::BatchRef arrow_;
 	
 	std::vector<TriMeshRef> meshes_;
@@ -56,13 +60,19 @@ private:
 
 	gl::TextureRef textTexture_;
 	Font font_{"Arial", 24};
+	
 	vec3 pos_{0.0, 1.0f, 0.0f};
+	vec3 initialPos_{1.4f, 1.75f, 0.0f};
 	quat rot_;
+	vec3 initialRot_{0.0, 0.0f, 0.0f};
+
 	vec3 gazeNormalized_{0.0f, 0.0f, -1.0f};
 	zmq::context_t context_;
 	zmq::socket_t sub_socket_;
 	bool mouseDown_{false};
 	bool useGaze_{true};
+	bool drawFrame_{true};
+	std::string focusedObject_{""};
 };
 
 void prepareSettings(GazeTracking::Settings *settings)
@@ -73,57 +83,79 @@ void prepareSettings(GazeTracking::Settings *settings)
 
 void GazeTracking::setup()
 {
+	std::ifstream ifstream("coco.ini");
+	
+	if (ifstream) {
+		json j;
+		ifstream >> j;
+
+		auto initialPos = j["initialPos"];
+		auto initialRot = j["initialRot"];
+
+		initialPos_.x = initialPos[0];
+		initialPos_.y = initialPos[1];
+		initialPos_.z = initialPos[2];
+		
+		initialRot_.x = initialRot[0];
+		initialRot_.y = initialRot[1];
+		initialRot_.z = initialRot[2];
+	}
+
 	cam_.setPerspective(60, getWindowWidth() / static_cast<float>(getWindowHeight()), 1, 1000);
 	cam_.lookAt({0.0f, 0.0f, 10.0f}, {0.0f, 0.0f, 0.0f});
 
-	auto lambert = gl::ShaderDef().lambert().color();
-	auto shader = gl::getStockShader(lambert);
+	// auto lambert = gl::ShaderDef().lambert().color();
+	// auto shader = gl::getStockShader(lambert);
+	shader_ = gl::GlslProg::create( loadAsset( "shader.vert" ), loadAsset( "shader.frag" ) );
 
 	arrowMesh_ = TriMesh::create(
 		(geom::Cone().base(0.08f).apex(0.0f).height(0.1f) & (geom::Cylinder().radius(0.02f).height(0.2f) >> geom::Translate(0.0f, -0.2f, 0.0f))) >> geom::Rotate(-M_PI / 2.0f, {1.0f, 0.0f, 0.0f}));
 
-	arrow_ = gl::Batch::create(*arrowMesh_, shader);
+	arrow_ = gl::Batch::create(*arrowMesh_, shader_);
 
 	ObjLoader loader( loadAsset("PEEK_3dmodel.obj") );
 	auto mesh = TriMesh::create( loader );
 	
 	meshes_.push_back(mesh);
-	batches_.push_back(gl::Batch::create(*mesh, shader));
-
-	loader = loadAsset("obj1.obj");
+	batches_.push_back(gl::Batch::create(*mesh, shader_));
 	
 	AxisAlignedBox bbox;
-	auto source = TriMesh( loader ); // >> geom::Bounds(&bbox) >> geom::Translate(1.0f, 0.0f, 0.0f);
-	//std::cout << bbox.getCenter() << bbox.getExtents() << std::endl;
-	source = source >> geom::Rotate(1.5f*M_PI, vec3(1.0f, 0.0f, 0.0f)) >> geom::Translate(0.5f, 1.0f, -0.5f);
-	mesh = TriMesh::create(source);
-	
+
+	loader = loadAsset("obj1.obj");
+	auto source = TriMesh( loader );
+	bbox = source.calcBoundingBox();
+	source = source >> geom::Translate(-bbox.getCenter()) >> geom::Rotate(1.5f*M_PI, vec3(1.0f, 0.0f, 0.0f)) >> geom::Translate(0.3f, 2.3f, -0.3f);
+	mesh = TriMesh::create(source);	
 	meshes_.push_back(mesh);
-	batches_.push_back(gl::Batch::create(*mesh, shader));
+	batches_.push_back(gl::Batch::create(*mesh, shader_));
 
-	// loader = loadAsset("obj2.obj");
-	// mesh = TriMesh::create(TriMesh( loader ) >> geom::Translate(0.0f, 0.0f, 0.0f));
-	// meshes_.push_back(mesh);
-	// batches_.push_back(gl::Batch::create(*mesh, shader));
+	loader = loadAsset("obj2.obj");
+	source = TriMesh( loader );
+	bbox = source.calcBoundingBox();
+	source = source >> geom::Translate(-bbox.getCenter()) >> geom::Rotate(1.5f*M_PI, vec3(1.0f, 0.0f, 0.0f)) >> geom::Translate(2.6f, 1.55f, -6.25f);
+	mesh = TriMesh::create(source);
+	meshes_.push_back(mesh);
+	batches_.push_back(gl::Batch::create(*mesh, shader_));
 
-	// loader = loadAsset("obj3.obj");
-	// mesh = TriMesh::create( TriMesh(loader) >> geom::Translate(0.0f, 0.0f, 0.0f) );
-	// meshes_.push_back(mesh);
-	// batches_.push_back(gl::Batch::create(*mesh, shader));
+	loader = loadAsset("obj3.obj");
+	source = TriMesh( loader );
+	bbox = source.calcBoundingBox();
+	source = source >> geom::Translate(-bbox.getCenter()) >> geom::Rotate(1.5f*M_PI, vec3(1.0f, 0.0f, 0.0f)) >> geom::Translate(2.2f, 1.5f, -3.0f);
+	mesh = TriMesh::create(source);
+	meshes_.push_back(mesh);
+	batches_.push_back(gl::Batch::create(*mesh, shader_));
 
-	// loader = loadAsset("cone.obj");
-	// mesh = TriMesh::create( loader );
-	// meshes_.push_back(mesh);
-	// batches_.push_back(gl::Batch::create(*mesh, shader));
+	ImGui::Initialize();
 
 	// construct a REQ (request) socket and connect to interface
 	zmq::socket_t socket{context_, zmq::socket_type::req};
+	socket.set(zmq::sockopt::linger, 0);
 	socket.connect("tcp://localhost:50020");
 
 	// set up some static data to send
 	const std::string sub_request{"SUB_PORT"};
 	socket.send(zmq::buffer(sub_request), zmq::send_flags::dontwait);
-
+	
 	std::this_thread::sleep_for(100ms);
 
 	bool pupil_detected = true;
@@ -154,13 +186,19 @@ void GazeTracking::setup()
     }
     
     socket.close();
-    
+
     zmqReader_ = std::thread(&GazeTracking::readZMQData, this);
 }
 
 GazeTracking::~GazeTracking() {
     runReader_ = false;
     zmqReader_.join();
+
+	json j;
+	j["initialPos"] = {initialPos_.x, initialPos_.y, initialPos_.z};
+	j["initialRot"] = {initialRot_.x, initialRot_.y, initialRot_.z};
+	std::ofstream ofstream("coco.ini");
+	ofstream << j;
 }
 
 
@@ -249,12 +287,10 @@ void GazeTracking::readZMQData() {
                     float z = static_cast<float>(gaze_point_3d[2]);
 
                     if (useGaze_) {
-                        std::lock_guard lock(mtx_);
-						// convert mm -> m
-						// change coordinate system
+                        std::lock_guard<std::mutex> lock(mtx_);
 						gazeNormalized_ = {x, -y, -z};
                     } else {
-                        std::lock_guard lock(mtx_);
+                        std::lock_guard<std::mutex> lock(mtx_);
                         gazeNormalized_ = {0.0f, 0.0f, -1.0f};
                     }
                 }
@@ -269,8 +305,8 @@ void GazeTracking::readZMQData() {
                     auto j = json::parse(oss.str());
 
                     auto motion = j["motion"];
-                    std::lock_guard lock(mtx_);
-                    pos_ = vec3{motion[0], motion[1], motion[2]} + vec3{1.4f, 1.75f, 0.0f};
+                    std::lock_guard<std::mutex> lock(mtx_);
+                    pos_ = vec3{motion[0], motion[1], motion[2]};
                     rot_ = {motion[6], motion[3], motion[4], motion[5]};
                 }
                 catch (...) {
@@ -285,6 +321,18 @@ void GazeTracking::readZMQData() {
 
 void GazeTracking::draw()
 {
+	ImGui::Begin( "Info" );
+	ImGui::Separator();
+	ImGui::DragFloat3("Initial pos", &initialPos_[0], 0.2f, -10.0f, 10.0f);
+	ImGui::DragFloat3("Initial rot", &initialRot_[0], 0.0f, -glm::pi<float>(), glm::pi<float>());
+	ImGui::Separator();
+	ImGui::Checkbox("Draw frame", &drawFrame_);
+	ImGui::Separator();
+	ImGui::Text("Focused object %s", focusedObject_.c_str());
+	ImGui::End();
+
+	shader_->uniform("uLightPos", vec3(100.0, 100.0, 100.0));
+
 	{
 		gl::ScopedMatrices scope;
 
@@ -292,6 +340,12 @@ void GazeTracking::draw()
 		gl::color(1.0f, 0.5f, 0.25f);
 		gl::enableDepthRead();
 		gl::enableDepthWrite();
+		
+		gl::enableFaceCulling(true);
+		
+		// gl::polygonMode(GL_FRONT_AND_BACK, GL_FILL);
+		// gl::ScopedFaceCulling cull(true, GL_BACK);
+
 		gl::setMatrices(cam_);
 
 		gl::enableWireframe();
@@ -301,17 +355,20 @@ void GazeTracking::draw()
         quat rot;
 
         {
-            std::lock_guard lock(mtx_);
+            std::lock_guard<std::mutex> lock(mtx_);
 			gazeVec = gazeNormalized_;
-            pos = pos_;
-            rot = rot_;
+            pos = pos_ + initialPos_;
+			auto initialRot = quat(initialRot_);
+            rot = rot_*initialRot;
         }
 
 		vec3 rotatedGazeVec = rot*gazeVec;
 
 		quat eyeQuat = rotation({0.0f, 0.0f, -1.0f}, gazeVec);
 
-		gl::drawCoordinateFrame(5.0f);
+		if (drawFrame_) {
+			gl::drawCoordinateFrame(5.0f);
+		}
 
 		Ray ray{pos, rotatedGazeVec};
 
@@ -321,6 +378,7 @@ void GazeTracking::draw()
 		textTexture_ = gl::Texture2d::create(tbox.render());
 
 		int id = 0;
+		focusedObject_ = "-";
 
 		for (int i = 0; i < meshes_.size(); ++i) {
 			
@@ -357,10 +415,12 @@ void GazeTracking::draw()
 				batches_[i]->draw();
 				gl::enableWireframe();
 			}
+
 			// Did we have a hit?
 			//else if( distance > 0.0f) {
-			else if (bbox.intersects(ray)) {
+			else if (bbox.intersects(ray) && dot(bbox.getCenter()-ray.getOrigin(), ray.getDirection()) > 0.0f) {
 				gl::disableWireframe();
+				gl::color( Color( CM_HSV, i/3.0, 1, 1 ) );
 				batches_[i]->draw();
 				gl::enableWireframe();
 
@@ -369,22 +429,26 @@ void GazeTracking::draw()
 				// gl::ScopedColor color(0.0f, 0.0f, 1.0f, 0.5f);
 				// gl::drawCube(pickedPoint, {2.0f, 2.0f, 2.0f});
 
-				std::ostringstream oss_gp;
-				oss_gp << "Object " << id << std::endl;
-				TextBox tbox = TextBox().alignment(TextBox::LEFT).font(font_).size(ivec2(600, TextBox::GROW)).text(oss_gp.str());
-				tbox.setColor(Color(1.0f, 0.65f, 0.35f));
-				tbox.setBackgroundColor(ColorA(0.5, 0, 0, 1));
-				textTexture_ = gl::Texture2d::create(tbox.render());
-
+				// std::ostringstream oss_gp;
+				// oss_gp << "Object " << id << std::endl;
+				// TextBox tbox = TextBox().alignment(TextBox::LEFT).font(font_).size(ivec2(600, TextBox::GROW)).text(oss_gp.str());
+				// tbox.setColor(Color(1.0f, 0.65f, 0.35f));
+				// tbox.setBackgroundColor(ColorA(0.5, 0, 0, 1));
+				// textTexture_ = gl::Texture2d::create(tbox.render());
+				gl::drawStrokedCube(bbox);
+				focusedObject_ = std::to_string(id);
 			} else {
+				gl::disableWireframe();
+				gl::color( Color( CM_HSV, i/3.0, 1, 1 ) );
 				batches_[i]->draw();
+				gl::enableWireframe();
 			}
 
 			id++;
 
 		}
 
-		gl::disableWireframe();
+		 gl::disableWireframe();
 
 		// gl::drawLine(pos, pos + 100.0f*rotatedGazeVec);
 

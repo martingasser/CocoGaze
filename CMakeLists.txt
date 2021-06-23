@@ -3,6 +3,10 @@ set( CMAKE_VERBOSE_MAKEFILE ON )
 
 project( GazeTracking )
 
+
+
+set(CMAKE_CXX_STANDARD 17)
+
 #set(CINDER_PATH "/Users/martin/devel/Cinder")
 get_filename_component( APP_PATH "${CMAKE_CURRENT_SOURCE_DIR}" ABSOLUTE )
 
