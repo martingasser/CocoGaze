@@ -147,45 +147,48 @@ void GazeTracking::setup()
 
 	ImGui::Initialize();
 
-	// construct a REQ (request) socket and connect to interface
-	zmq::socket_t socket{context_, zmq::socket_type::req};
-	socket.set(zmq::sockopt::linger, 0);
-	socket.connect("tcp://localhost:50020");
+	// // construct a REQ (request) socket and connect to interface
+	// zmq::socket_t socket{context_, zmq::socket_type::req};
+	// socket.set(zmq::sockopt::linger, 0);
+	// socket.connect("tcp://localhost:50020");
 
-	// set up some static data to send
-	const std::string sub_request{"SUB_PORT"};
-	socket.send(zmq::buffer(sub_request), zmq::send_flags::dontwait);
+	// // set up some static data to send
+	// const std::string sub_request{"SUB_PORT"};
+	// socket.send(zmq::buffer(sub_request), zmq::send_flags::dontwait);
 	
-	std::this_thread::sleep_for(100ms);
+	// std::this_thread::sleep_for(100ms);
 
-	bool pupil_detected = true;
-	zmq::message_t reply{};
-	auto res = socket.recv(reply, zmq::recv_flags::dontwait);
+	// bool pupil_detected = true;
+	// zmq::message_t reply{};
+	// auto res = socket.recv(reply, zmq::recv_flags::dontwait);
 
-	if (!res)
-	{
-		pupil_detected = false;
-	}
+	// if (!res)
+	// {
+	// 	pupil_detected = false;
+	// }
 
-	if (pupil_detected)
-	{
-        std::cout << "Pupil detected" << std::endl;
-		std::string sub_port = reply.to_string();
+	// if (pupil_detected)
+	// {
+    //     std::cout << "Pupil detected" << std::endl;
+	// 	std::string sub_port = reply.to_string();
 
-		const std::string pub_request{"PUB_PORT"};
-		socket.send(zmq::buffer(pub_request), zmq::send_flags::none);
-		// wait for reply from server
-		socket.recv(reply, zmq::recv_flags::none);
-		std::string pub_port = reply.to_string();
+	// 	const std::string pub_request{"PUB_PORT"};
+	// 	socket.send(zmq::buffer(pub_request), zmq::send_flags::none);
+	// 	// wait for reply from server
+	// 	socket.recv(reply, zmq::recv_flags::none);
+	// 	std::string pub_port = reply.to_string();
 
-		sub_socket_ = zmq::socket_t{context_, zmq::socket_type::sub};
-		sub_socket_.connect(std::string("tcp://localhost:") + sub_port);
+	// 	sub_socket_ = zmq::socket_t{context_, zmq::socket_type::sub};
+	// 	sub_socket_.connect(std::string("tcp://localhost:") + sub_port);
 		
-        sub_socket_.set(zmq::sockopt::subscribe, "gaze.");
-        sub_socket_.set(zmq::sockopt::subscribe, "tracking");
-    }
+    //     sub_socket_.set(zmq::sockopt::subscribe, "gaze.");
+    //     sub_socket_.set(zmq::sockopt::subscribe, "tracking");
+    // }
     
-    socket.close();
+    // socket.close();
+
+    sub_socket_ = zmq::socket_t{context_, zmq::socket_type::sub};
+    sub_socket_.connect(std::string("tcp://macbook.local:9999"));
 
     zmqReader_ = std::thread(&GazeTracking::readZMQData, this);
 }
@@ -267,8 +270,7 @@ void GazeTracking::readZMQData() {
 
             std::string topic((const char *)recv_msgs[0].data(), recv_msgs[0].size());
 
-            if (topic == "gaze.3d.0.") {
-
+            if (topic == "position") {
                 msgpack::object_handle oh = msgpack::unpack((const char *)recv_msgs[1].data(), recv_msgs[1].size());
                 msgpack::object obj = oh.get();
 
@@ -276,43 +278,58 @@ void GazeTracking::readZMQData() {
                 oss << obj;
                 auto j = json::parse(oss.str());
 
-                auto confidence = j["confidence"];
-                auto gaze_point_3d = j["gaze_normal_3d"];
-
-                float c = static_cast<float>(confidence);
-
-                if (c > 0.9f) {
-                    float x = static_cast<float>(gaze_point_3d[0]);
-                    float y = static_cast<float>(gaze_point_3d[1]);
-                    float z = static_cast<float>(gaze_point_3d[2]);
-
-                    if (useGaze_) {
-                        std::lock_guard<std::mutex> lock(mtx_);
-						gazeNormalized_ = {x, -y, -z};
-                    } else {
-                        std::lock_guard<std::mutex> lock(mtx_);
-                        gazeNormalized_ = {0.0f, 0.0f, -1.0f};
-                    }
-                }
+                std::cout << j << std::endl;
             }
-            else if (topic == "tracking") {
-                msgpack::object_handle oh = msgpack::unpack((const char *)recv_msgs[1].data(), recv_msgs[1].size());
-                msgpack::object obj = oh.get();
+            else if (topic == "rotation") {
 
-                std::ostringstream oss;
-                oss << obj;
-                try {
-                    auto j = json::parse(oss.str());
-
-                    auto motion = j["motion"];
-                    std::lock_guard<std::mutex> lock(mtx_);
-                    pos_ = vec3{motion[0], motion[1], motion[2]};
-                    rot_ = {motion[6], motion[3], motion[4], motion[5]};
-                }
-                catch (...) {
-                    std::cout << "error during json parsing" << std::endl;
-                }
             }
+
+        //     if (topic == "gaze.3d.0.") {
+
+        //         msgpack::object_handle oh = msgpack::unpack((const char *)recv_msgs[1].data(), recv_msgs[1].size());
+        //         msgpack::object obj = oh.get();
+
+        //         std::ostringstream oss;
+        //         oss << obj;
+        //         auto j = json::parse(oss.str());
+
+        //         auto confidence = j["confidence"];
+        //         auto gaze_point_3d = j["gaze_normal_3d"];
+
+        //         float c = static_cast<float>(confidence);
+
+        //         if (c > 0.9f) {
+        //             float x = static_cast<float>(gaze_point_3d[0]);
+        //             float y = static_cast<float>(gaze_point_3d[1]);
+        //             float z = static_cast<float>(gaze_point_3d[2]);
+
+        //             if (useGaze_) {
+        //                 std::lock_guard<std::mutex> lock(mtx_);
+		// 				gazeNormalized_ = {x, -y, -z};
+        //             } else {
+        //                 std::lock_guard<std::mutex> lock(mtx_);
+        //                 gazeNormalized_ = {0.0f, 0.0f, -1.0f};
+        //             }
+        //         }
+        //     }
+        //     else if (topic == "tracking") {
+        //         msgpack::object_handle oh = msgpack::unpack((const char *)recv_msgs[1].data(), recv_msgs[1].size());
+        //         msgpack::object obj = oh.get();
+
+        //         std::ostringstream oss;
+        //         oss << obj;
+        //         try {
+        //             auto j = json::parse(oss.str());
+
+        //             auto motion = j["motion"];
+        //             std::lock_guard<std::mutex> lock(mtx_);
+        //             pos_ = vec3{motion[0], motion[1], motion[2]};
+        //             rot_ = {motion[6], motion[3], motion[4], motion[5]};
+        //         }
+        //         catch (...) {
+        //             std::cout << "error during json parsing" << std::endl;
+        //         }
+        //     }
         }
 
         std::this_thread::yield();
