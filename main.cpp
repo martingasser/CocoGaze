@@ -187,8 +187,19 @@ void GazeTracking::setup()
     
     // socket.close();
 
+	// zmq::socket_t socket{context_, zmq::socket_type::req};
+	// socket.set(zmq::sockopt::linger, 0);
+	// socket.connect("tcp://192.168.0.192:9999");
+    // socket.send(zmq::buffer("hello"), zmq::send_flags::dontwait);
+    // std::this_thread::sleep_for(100ms);
+    // zmq::message_t reply{};
+	// auto res = socket.recv(reply, zmq::recv_flags::dontwait);
+
+
     sub_socket_ = zmq::socket_t{context_, zmq::socket_type::sub};
-    sub_socket_.connect(std::string("tcp://macbook.local:9999"));
+    sub_socket_.connect(std::string("tcp://192.168.0.192:9999"));
+    sub_socket_.set(zmq::sockopt::subscribe, "position");
+    std::this_thread::sleep_for(100ms);
 
     zmqReader_ = std::thread(&GazeTracking::readZMQData, this);
 }
@@ -271,17 +282,26 @@ void GazeTracking::readZMQData() {
             std::string topic((const char *)recv_msgs[0].data(), recv_msgs[0].size());
 
             if (topic == "position") {
-                msgpack::object_handle oh = msgpack::unpack((const char *)recv_msgs[1].data(), recv_msgs[1].size());
-                msgpack::object obj = oh.get();
+                std::string payload((const char *)recv_msgs[1].data(), recv_msgs[1].size());
+                auto j = json::parse(payload);
 
-                std::ostringstream oss;
-                oss << obj;
-                auto j = json::parse(oss.str());
+                auto x = j["x"];
+                auto y = j["y"];
+                auto z = j["z"];
 
-                std::cout << j << std::endl;
+                pos_[0] = x;
+                pos_[1] = y;
+                pos_[2] = z;
+
+                std::cout << x << ", " << y << ", " << z << std::endl;
             }
             else if (topic == "rotation") {
+                std::string payload((const char *)recv_msgs[1].data(), recv_msgs[1].size());
+                auto j = json::parse(payload);
 
+                auto x = j["x"];
+                auto y = j["y"];
+                auto z = j["z"];
             }
 
         //     if (topic == "gaze.3d.0.") {
@@ -373,6 +393,7 @@ void GazeTracking::draw()
 
         {
             std::lock_guard<std::mutex> lock(mtx_);
+
 			gazeVec = gazeNormalized_;
             pos = pos_ + initialPos_;
 			auto initialRot = quat(initialRot_);
